@@ -7,6 +7,33 @@ cd("F:\\VSCode Projects\\MDLSNN")
 
 abstract type IzhNetwork end
 
+# AboAmmar quick elementwise row multiplication
+# Found here: https://stackoverflow.com/questions/48460875/vector-matrix-element-wise-multiplication-by-rows-in-julia-efficiently
+
+function pre_trace_copier(pre_trace::Vector{<:AbstractFloat}, firings::Vector{Bool})
+    side = length(pre_trace)
+    M = zeros(side, side)
+
+    @simd for i in 1:length(firings)
+        @inbounds if firings[i]
+            M[i, :] = pre_trace
+        end
+    end
+    M
+end
+
+function post_trace_copier(post_trace::Vector{<:AbstractFloat}, firings::Vector{Bool})
+    side = length(post_trace)
+    M = zeros(side, side)
+
+    @simd for j in 1:length(firings)
+        @inbounds if firings[j]
+            M[:, j] = post_trace
+        end
+    end
+    M
+end
+
 # reward functionality
 # Thanks be to Quintana, Perez-Pena, and Galindo (2022) for the following algorithm
 
@@ -25,18 +52,21 @@ function step_reward!(reward::Reward, reward_injection::AbstractFloat)
 end
 
 mutable struct EligibilityTrace
+    # for speed the inhibitory-ness of junctions must be stored here within the constants
+
+    # vectors to keep track of traces, typically initialized at 0
     pre_trace::Vector{<:AbstractFloat}
     post_trace::Vector{<:AbstractFloat}
     e_trace::Matrix{<:AbstractFloat}
 
     # Parameters for pre/post incrementing and decay
-
+    # 
     const pre_increment::AbstractFloat
     const post_increment::AbstractFloat
 
-    # Constant to multiply inhibitory post-synaptic junction traces by when updating the eligibility trace
-    # Should typically be negative
-    const inhibitory_constant::AbstractFloat
+    # Constant to multiply junction traces by when updating the eligibility trace
+    # Should typically be negative for inhibitory junctions
+    const constants::Matrix{<:AbstractFloat}
 
     # Decay parameters
     const pre_decay::AbstractFloat
@@ -48,7 +78,6 @@ end
 function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, is_inhibitory::Vector{Bool})
     len_pre = length(trace.pre_trace)
     len_post = length(trace.post_trace)
-    len_firings = length(firings)
 
     trace.pre_trace = trace.pre_trace - trace.pre_trace/trace.pre_decay + firings * trace.pre_increment
     trace.post_trace = trace.post_trace - trace.post_trace/trace.post_decay + firings * trace.post_increment
@@ -126,108 +155,61 @@ function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, is_inhibito
     trace.e_trace = trace.e_trace .- trace.e_trace/trace.e_decay
 end
 
-function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::AbstractMatrix{Bool}, is_inhibitory::AbstractVector{Bool})
-    len_pre = length(trace.pre_trace)
+function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::AbstractMatrix{Bool})
     len_post = length(trace.post_trace)
-    len_firings = length(firings)
+    len_pre = length(trace.pre_trace)
 
     trace.pre_trace = trace.pre_trace - trace.pre_trace/trace.pre_decay + firings * trace.pre_increment
     trace.post_trace = trace.post_trace - trace.post_trace/trace.post_decay + firings * trace.post_increment
 
-    # restructured logic
-    #
-    # Pre-synaptic input (second index, or column index, of matrix)
-    #     |
-    #     v
-    # . . . . .
-    # . . . . . --> Post-synaptic output (first index or row index)
-    # . . . . .
+    @inbounds for i in 1:len_post
+        @inbounds @simd for j in 1:len_pre
 
-    for (i, fired) in 1:len_firings
-        # if neuron i fired and it's inhibitory
-        if is_inhibitory[i] && firings[i]
-            # this loop still checks if the pre-synaptic neuron is inhibitory
-            for j in 1:len_pre
-                if mask[i, j]
-                # note j is pre-synapse i is post-synapse
-                    is_inhibitory_cleft = is_inhibitory[j]
-                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.pre_trace[j]*(is_inhibitory_cleft)
+
+            # i is row index, j is column index, so...
+            #
+            #
+            # Pre-synaptic input (indexed with j)
+            #     |
+            #     v
+            # . . . . .
+            # . . . . . --> Post-synaptic output (indexed with i)
+            # . . . . .
+            
+            # Check if presynaptic neuron is inhibitory
+
+            # Check if the neurons have a synpatic connection j -> i
+            if mask[i,j]
+
+                # We add the *opposite* trace given a neural spike
+                # So if post-synaptic neuron i spikes, we add the trace for the 
+                # pre-synaptic neuron to the eligibility trace
+
+                if firings[i]
+                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.constants[i,j]*trace.pre_trace[j]
                 end
-            end
-            # but this loop doesn't have to, and updates all traces associated with i's synaptic clefts (where i is pre-synaptic, hence reversed index)
-            for j in 1:len_post
-                if mask[j, i]
-                # note i is post-synapse i is pre-synapse
-                    trace.e_trace[j, i] = trace.e_trace[j, i] + trace.inhibitory_constant*trace.pre_trace[i]
+
+                # And if pre-synaptic neuron j spikes, we add the trace for the 
+                # post-synaptic neuron to the eligibility trace
+
+                if firings[j]
+                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.constants[i,j]*trace.post_trace[i]
                 end
-            end
-        elseif firings[i]
-            # this loop still checks if the pre-synaptic neuron is inhibitory
-            for j in 1:len_pre
-                if mask[i, j]
-                # note j is pre-synapse i is post-synapse
-                    is_inhibitory_cleft = is_inhibitory[j]
-                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.pre_trace[j]*(is_inhibitory_cleft)
-                end
-            end
-            # but this loop doesn't have to, and updates all traces associated with i's synaptic clefts (where i is pre-synaptic, hence reversed index)
-            for j in 1:len_post
-                if mask[j, i]
-                # note i is post-synapse i is pre-synapse
-                    trace.e_trace[j, i] = trace.e_trace[j, i] + trace.pre_trace[i]
-                end
+
+                # each trace will decay according to the decay parameter
+                
             end
 
         end
     end
 
-    # for i in 1:len_post
-    #     for j in 1:len_pre
-
-
-    #         # i is row index, j is column index, so...
-    #         #
-    #         #
-    #         # Pre-synaptic input (indexed with j)
-    #         #     |
-    #         #     v
-    #         # . . . . .
-    #         # . . . . . --> Post-synaptic output (indexed with i)
-    #         # . . . . .
-            
-    #         # Check if presynaptic neuron is inhibitory
-    #         is_inhibitory_cleft = is_inhibitory[j]
-
-    #         # Check if the neurons have a synpatic connection j -> i
-    #         if mask[i,j]
-
-    #             # We add the *opposite* trace given a neural spike
-    #             # So if post-synaptic neuron i spikes, we add the trace for the 
-    #             # pre-synaptic neuron to the eligibility trace
-
-    #             if firings[i]
-    #                 trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.pre_trace[j]*(is_inhibitory_cleft)
-    #             end
-
-    #             # And if pre-synaptic neuron j spikes, we add the trace for the 
-    #             # post-synaptic neuron to the eligibility trace
-
-    #             if firings[j]
-    #                 trace.e_trace[i, j] = trace.e_trace[i, j] + trace.post_trace[i]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.post_trace[i]*(is_inhibitory_cleft)
-    #             end
-
-    #             # each trace will decay according to the decay parameter
-                
-    #         end
-
-    #     end
-    # end
-
     # each trace will decay according to the decay parameter
-    trace.e_trace = trace.e_trace .- trace.e_trace/trace.e_decay
+    trace.e_trace = trace.e_trace - trace.e_trace/trace.e_decay
 end
 
-function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::SparseMatrixCSC{Bool, <:Integer}, is_inhibitory::AbstractVector{Bool})
+
+
+function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::SparseMatrixCSC{Bool, <:Integer})
 
     trace.pre_trace = trace.pre_trace - trace.pre_trace/trace.pre_decay + firings * trace.pre_increment
     trace.post_trace = trace.post_trace - trace.post_trace/trace.post_decay + firings * trace.post_increment
@@ -241,43 +223,46 @@ function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::Spars
     # . . . . . --> Post-synaptic output (first index i or row index i)
     # . . . . .
 
-    I, J = size(mask)
-    rows = rowvals(mask)
+    #firings_s = firings
+    addable_pre_trace = pre_trace_copier(trace.pre_trace, firings) #trace.pre_trace * firings_s'
+    addable_post_trace = post_trace_copier(trace.post_trace, firings) #firings_s * trace.post_trace'
+    e_trace_delta = (addable_post_trace+addable_pre_trace) .* trace.constants 
+    trace.e_trace = trace.e_trace + e_trace_delta .* mask - trace.e_trace/trace.e_decay
 
 
-    for j in 1:J
-        is_inhibitory_cleft = is_inhibitory[j]
-        if is_inhibitory_cleft
-            # k variable used to loop over range in nzrange and retrieve true row index i
-            for k in nzrange(mask, j)
-                # use nzrange to get actual row index i
-                i = rows[k]
-
-
-                if firings[i]
-                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.inhibitory_constant*trace.pre_trace[j]
-                end
-                if firings[j]
-                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.inhibitory_constant*trace.post_trace[i]
-                end
-
-            end
-        else
-            for k in nzrange(mask, j)
-                i = rows[k]
-                if firings[i]
-                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]
-                end
-                if firings[j]
-                    trace.e_trace[i, j] = trace.e_trace[i, j] + trace.post_trace[i]
-                end
-
-            end
-        end
-    end
+    #for j in 1:J
+    #    is_inhibitory_cleft = is_inhibitory[j]
+    #    if is_inhibitory_cleft
+    #        # k variable used to loop over range in nzrange and retrieve true row index i
+    #        for k in nzrange(mask, j)
+    #            # use nzrange to get actual row index i
+    #            i = rows[k]
+    #
+    #
+    #            if firings[i]
+    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.inhibitory_constant*trace.pre_trace[j]
+    #            end
+    #            if firings[j]
+    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.inhibitory_constant*trace.post_trace[i]
+    #            end
+    #
+    #        end
+    #    else
+    #        for k in nzrange(mask, j)
+    #            i = rows[k]
+    #            if firings[i]
+    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]
+    #            end
+    #            if firings[j]
+    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.post_trace[i]
+    #            end
+    #
+    #        end
+    #    end
+    #end
 
     # each trace will decay according to the decay parameter
-    trace.e_trace = trace.e_trace .- trace.e_trace/trace.e_decay
+    #trace.e_trace = trace.e_trace - trace.e_trace/trace.e_decay
 end
 
 function weight_update(trace::EligibilityTrace, reward::Reward)
@@ -493,8 +478,10 @@ b = (vcat([.2 for i in 1:Ne] , (.25 .- .05*ri)))
 c = (vcat((-65.0 .+ 15.0 * (re .^ 2)), ([-65.0 for i in 1:Ni])))
 d = (vcat((8.0 .- 6.0*(re .^ 2)), [2.0 for i in 1:Ni]))
 S = (hcat(.5*rand(Ne+Ni, Ne), -rand(Ne+Ni, Ni)))
-mask = sparse(rand([true, false], 1000, 1000) .* rand([true, false], 1000, 1000))
+mask = rand([true, false], 1000, 1000) .* rand([true, false], 1000, 1000)
 S = sparse(S .* mask)
+S_ub = repeat(vcat(4.0*ones(Ne), zeros(Ni))', N, 1)
+S_lb = repeat(vcat(zeros(Ne), -4*ones(Ni))', N, 1)
 
 v = ([-65.0 for i in 1:(Ne+Ni)])
 u = (b .* v)
@@ -508,9 +495,17 @@ reward = Reward(0.0, 200)
 # initialize elgibility trace parameters
 pre_synaptic_increment = .125
 post_synaptic_increment = -.125
+
+# used to initialize const_matrix
 inhibitory_multiple = -1.5
+excitatory_multiple = 1
+const_vector = vcat([excitatory_multiple for i in 1:Ne], [inhibitory_multiple for i in 1:Ni])
+
+# create a matrix of constants for the eligibility trace, this is used to keep inhibitory connections negative
+const_matrix = repeat(const_vector', N, 1)
+
 all_decay = 1000
-eligibility_trace = EligibilityTrace(zeros(N), zeros(N), zeros(N, N), pre_synaptic_increment, post_synaptic_increment, inhibitory_multiple, all_decay, all_decay, all_decay)
+eligibility_trace = EligibilityTrace(zeros(N), zeros(N), zeros(N, N), pre_synaptic_increment, post_synaptic_increment, const_matrix, all_decay, all_decay, all_decay)
 
 input_groups = [1:50, 51:100, 101:150, 151:200, 201:250, 251:300, 301:350, 351:400, 401:450, 451:500]
 
@@ -531,7 +526,7 @@ for T in 1:36001
         end
         step_network!(I, net)
 
-        step_trace!(eligibility_trace, net.fired, net.mask, is_inhibitory)
+        step_trace!(eligibility_trace, net.fired, net.mask)
 
         # inject dopamine if Group 1 stimulated
         stim_supplied && input == 1 ? step_reward!(reward, .5) : step_reward!(reward, 0.0)
@@ -541,6 +536,7 @@ for T in 1:36001
         
         # update weights
         net.S = net.S + dw
+        net.S .= clamp.(net.S, S_lb, S_ub)
 
         global firings = hcat(firings, net.fired)
         push!(pre_trace_1, eligibility_trace.pre_trace[1])
@@ -553,11 +549,11 @@ for T in 1:36001
     end
 
     print("$T seconds finished\n")
-    if T % 60 == 1
-        raster_plot(firings)
-        savefig("raster_plot_$T.png")
-        eligibility_trace_plots([pre_trace_1, post_trace_1, reward_trace])
-        savefig("trace_plot_$T.png")
-    end
+    #if T % 1 == 1
+    raster_plot(firings)
+    savefig("raster_plot_$T.png")
+    eligibility_trace_plots([pre_trace_1, post_trace_1, reward_trace])
+    savefig("trace_plot_$T.png")
+    #end
 end
 
