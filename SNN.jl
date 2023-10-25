@@ -41,14 +41,14 @@ mutable struct Reward
     # i.e. "dopamine"
 
     # amount of "reward" present in the system
-    reward::AbstractFloat
+    const reward::AbstractFloat
 
     # constant decay parameter
     const decay::AbstractFloat
 end
 
-function step_reward!(reward::Reward, reward_injection::AbstractFloat)
-    reward.reward = reward.reward - reward.reward/reward.decay + reward_injection
+function step_reward(reward::Reward, reward_injection::AbstractFloat)
+    Reward(reward.reward - reward.reward/reward.decay + reward_injection, reward.decay)
 end
 
 mutable struct EligibilityTrace
@@ -75,7 +75,7 @@ mutable struct EligibilityTrace
 end
 
 
-function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, is_inhibitory::Vector{Bool})
+function step_trace!(trace::EligibilityTrace, firings::Vector{Bool})
     len_pre = length(trace.pre_trace)
     len_post = length(trace.post_trace)
 
@@ -87,75 +87,54 @@ function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, is_inhibito
 
 
     # restructured logic
+    len_post = length(trace.post_trace)
+    len_pre = length(trace.pre_trace)
 
-    for (i, fired) in enumerate(firings)
-        # if neuron i fired and it's inhibitory
-        if is_inhibitory[i] && fired
-            # this loop still checks if the pre-synaptic neuron is inhibitory
-            for j in 1:len_pre
-                # note j is pre-synapse i is post-synapse
-                is_inhibitory_cleft = is_inhibitory[j]
-                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.pre_trace[j]*(is_inhibitory_cleft)
+    trace.pre_trace = trace.pre_trace - trace.pre_trace/trace.pre_decay + firings * trace.pre_increment
+    trace.post_trace = trace.post_trace - trace.post_trace/trace.post_decay + firings * trace.post_increment
+
+    @inbounds for i in 1:len_post
+        @inbounds @simd for j in 1:len_pre
+
+
+            # i is row index, j is column index, so...
+            #
+            #
+            # Pre-synaptic input (indexed with j)
+            #     |
+            #     v
+            # . . . . .
+            # . . . . . --> Post-synaptic output (indexed with i)
+            # . . . . .
+            
+            # Check if presynaptic neuron is inhibitory
+
+            # We add the *opposite* trace given a neural spike
+            # So if post-synaptic neuron i spikes, we add the trace for the 
+            # pre-synaptic neuron to the eligibility trace
+
+            if firings[i]
+                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.constants[i,j]*trace.pre_trace[j]
             end
-            # but this loop doesn't have to, and updates all traces associated with i's synaptic clefts (where i is pre-synaptic, hence reversed index)
-            for j in 1:len_post
-                # note i is post-synapse i is pre-synapse
-                trace.e_trace[j, i] = trace.e_trace[j, i] + trace.inhibitory_constant*trace.pre_trace[i]
+
+            # And if pre-synaptic neuron j spikes, we add the trace for the 
+            # post-synaptic neuron to the eligibility trace
+
+            if firings[j]
+                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.constants[i,j]*trace.post_trace[i]
             end
-        elseif fired
-            # this loop still checks if the pre-synaptic neuron is inhibitory
-            for j in 1:len_pre
-                # note j is pre-synapse i is post-synapse
-                is_inhibitory_cleft = is_inhibitory[j]
-                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.pre_trace[j]*(is_inhibitory_cleft)
-            end
-            # but this loop doesn't have to, and updates all traces associated with i's synaptic clefts (where i is pre-synaptic, hence reversed index)
-            for j in 1:len_post
-                # note i is post-synapse i is pre-synapse
-                trace.e_trace[j, i] = trace.e_trace[j, i] + trace.pre_trace[i]
-            end
+
+            # each trace will decay according to the decay parameter
+            
 
         end
     end
 
-    # for i in 1:len_post
-    #     for j in 1:len_pre
-
-    #         # i is row index, j is column index, so...
-    #         #
-    #         #
-    #         # Pre-synaptic input (indexed with j)
-    #         #     |
-    #         #     v
-    #         # . . . . .
-    #         # . . . . . --> Post-synaptic output (indexed with i)
-    #         # . . . . .
-
-    #         # Check if presynaptic neuron is inhibitory
-    #         is_inhibitory_cleft = is_inhibitory[j]
-
-    #         # We add the *opposite* trace given a neural spike
-    #         # So if post-synaptic neuron i spikes, we add the trace for the 
-    #         # pre-synaptic neuron to the eligibility trace
-    #         if firings[i]
-    #             trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.pre_trace[j]*(!is_inhibitory_cleft)
-    #         end
-
-    #         # And if pre-synaptic neuron j spikes, we add the trace for the 
-    #         # post-synaptic neuron to the eligibility trace
-
-    #         if firings[j]
-    #             trace.e_trace[i, j] = trace.e_trace[i, j] + trace.post_trace[i]*(!is_inhibitory_cleft) + trace.inhibitory_constant*trace.post_trace[i]*(!is_inhibitory_cleft)
-    #         end
-    #     end
-    # end
-
-
-    # each trace will decay according to the decay parameter
     trace.e_trace = trace.e_trace .- trace.e_trace/trace.e_decay
 end
 
 function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::AbstractMatrix{Bool})
+
     len_post = length(trace.post_trace)
     len_pre = length(trace.pre_trace)
 
@@ -210,6 +189,7 @@ end
 
 
 function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::SparseMatrixCSC{Bool, <:Integer})
+    # Sparse masking not currently recommended, but kept because it was written
 
     trace.pre_trace = trace.pre_trace - trace.pre_trace/trace.pre_decay + firings * trace.pre_increment
     trace.post_trace = trace.post_trace - trace.post_trace/trace.post_decay + firings * trace.post_increment
@@ -295,11 +275,16 @@ mutable struct UnmaskedIzhNetwork <: IzhNetwork
     # synaptic weights
     S::Matrix{<:AbstractFloat}
 
+    # bounds used for clamping, UB should generally be 0 for inhibitory networks
+    # LB should be 0 for excitatory networks
+    S_ub::Matrix{<:AbstractFloat}
+    S_lb::Matrix{<:AbstractFloat}
+
 
     # boolean of is-fired
     fired::Vector{Bool}
 
-    function UnmaskedIzhNetwork(N::Integer, a::Vector{<:AbstractFloat}, b::Vector{<:AbstractFloat}, c::Vector{<:AbstractFloat}, d::Vector{<:AbstractFloat}, v::Vector{<:AbstractFloat}, u::Vector{<:AbstractFloat}, S::Matrix{<:AbstractFloat}, fired::AbstractVector{Bool})
+    function UnmaskedIzhNetwork(N::Integer, a::Vector{<:AbstractFloat}, b::Vector{<:AbstractFloat}, c::Vector{<:AbstractFloat}, d::Vector{<:AbstractFloat}, v::Vector{<:AbstractFloat}, u::Vector{<:AbstractFloat}, S::Matrix{<:AbstractFloat}, S_ub::Matrix{<:AbstractFloat}, S_lb::Matrix{<:AbstractFloat}, fired::AbstractVector{Bool})
         @assert length(a) == N
         @assert length(b) == N
         @assert length(c) == N
@@ -307,9 +292,11 @@ mutable struct UnmaskedIzhNetwork <: IzhNetwork
         @assert length(v) == N
         @assert length(u) == N
         @assert size(S) == (N, N)
+        @assert size(S_lb) == (N, N)
+        @assert size(S_ub) == (N, N)
         @assert length(fired) == N
 
-        return new(N, a, b, c, d, v, u, S, fired)
+        return new(N, a, b, c, d, v, u, S, S_ub, S_lb, fired)
     end
 end
 
@@ -334,13 +321,18 @@ mutable struct MaskedIzhNetwork <: IzhNetwork
     # synaptic weights
     S::Union{Matrix{<:AbstractFloat}, SparseMatrixCSC{<:AbstractFloat, <:Integer}}
 
+    # bounds used for clamping, UB should generally be 0 for inhibitory networks
+    # LB should be 0 for excitatory networks
+    S_ub::Matrix{<:AbstractFloat}
+    S_lb::Matrix{<:AbstractFloat}
+
     # mask
     mask::Union{AbstractMatrix{Bool}, SparseMatrixCSC{Bool, <:Integer}}
 
     # boolean of is-fired
     fired::Vector{Bool}
 
-    function MaskedIzhNetwork(N::Integer, a::Vector{<:AbstractFloat}, b::Vector{<:AbstractFloat}, c::Vector{<:AbstractFloat}, d::Vector{<:AbstractFloat}, v::Vector{<:AbstractFloat}, u::Vector{<:AbstractFloat}, S::Union{Matrix{<:AbstractFloat}, SparseMatrixCSC{<:AbstractFloat, <:Integer}}, mask::Union{AbstractMatrix{Bool}, SparseMatrixCSC{Bool, <:Integer}}, fired::AbstractVector{Bool})
+    function MaskedIzhNetwork(N::Integer, a::Vector{<:AbstractFloat}, b::Vector{<:AbstractFloat}, c::Vector{<:AbstractFloat}, d::Vector{<:AbstractFloat}, v::Vector{<:AbstractFloat}, u::Vector{<:AbstractFloat}, S::Union{Matrix{<:AbstractFloat}, SparseMatrixCSC{<:AbstractFloat, <:Integer}}, S_ub::Matrix{<:AbstractFloat}, S_lb::Matrix{<:AbstractFloat}, mask::Union{AbstractMatrix{Bool}, SparseMatrixCSC{Bool, <:Integer}}, fired::AbstractVector{Bool})
         @assert length(a) == N
         @assert length(b) == N
         @assert length(c) == N
@@ -351,7 +343,7 @@ mutable struct MaskedIzhNetwork <: IzhNetwork
         @assert size(mask) == (N, N)
         @assert length(fired) == N
 
-        return new(N, a, b, c, d, v, u, S, mask, fired)
+        return new(N, a, b, c, d, v, u, S, S_ub, S_lb, mask, fired)
     end
 
 
@@ -457,6 +449,164 @@ end
 
 
 
+### Two Neuron Test Strengthen ###
+
+S_2 = [0.0 .01; .01 0.0]
+S_lb_2 = [0.0 0.0; 0.0 0.0]
+S_ub_2 = [4.0 4.0; 4.0 4.0]
+mask_2 = [false true; true false]
+a_2 = [.02, .02]
+b_2 = [.2, .2]
+c_2 = [-65.0, -65.0]
+d_2 = [8.0, 8.0]
+
+v_2 = [-65.0, -65.0]
+u_2 = b_2 .* v_2
+firings_2 = [false, false]
+
+reward_2 = Reward(0.0, 200)
+
+net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, u_2, v_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
+
+
+pre_synaptic_increment_2 = .125
+post_synaptic_increment_2 = -.125
+
+const_matrix_2 = [1.0 1.0; 1.0 1.0]
+all_decay = 1000
+
+eligibility_trace_2 = EligibilityTrace(zeros(2), zeros(2), zeros(2, 2), pre_synaptic_increment_2, post_synaptic_increment_2, const_matrix_2, all_decay, all_decay, all_decay)
+
+print("Starting simulation Two Neuron+\n")
+for T in 1:60
+    global firings_2 = [false, false]
+    pre_trace_plus = Float64[]
+    post_trace_plus = Float64[]
+    e_trace_plus = Float64[]
+    reward_trace_plus = Float64[]
+    weight_plus = Float64[]
+
+    for t in 1:1000
+        if t == 500
+            I = [105.0, 0.0]
+        elseif t == 505
+            I = [0.0, 105.0]
+        else
+            I = [0.0, 0.0]
+        end
+
+        step_network!(I, net_2)
+
+        step_trace!(eligibility_trace_2, net_2.fired, net_2.mask)
+
+        # inject dopamine if Group 1 stimulated
+        global reward_2 = t == 505 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
+
+        # find weight update increment
+        dw = weight_update(eligibility_trace_2, reward_2)
+        
+        # update weights
+        net_2.S = net_2.S + dw
+        net_2.S .= clamp.(net_2.S, S_lb_2, S_ub_2)
+
+        global firings_2 = hcat(firings_2, net_2.fired)
+        push!(pre_trace_plus, eligibility_trace_2.pre_trace[1])
+        push!(post_trace_plus, eligibility_trace_2.post_trace[2])
+        push!(e_trace_plus, eligibility_trace_2.e_trace[2, 1])
+        push!(reward_trace_plus, reward_2.reward)
+        push!(weight_plus, net_2.S[2, 1])
+    end
+
+    print("$T seconds finished\n")
+    if T % 5 == 1
+        raster_plot(firings_2)
+        savefig("two_neuron_strengthen_raster_plot_$T.png")
+        eligibility_trace_plots([pre_trace_plus, post_trace_plus, e_trace_plus, reward_trace_plus, weight_plus])
+        savefig("two_neuron_strengthen_trace_plot_$T.png")
+    end
+end
+
+
+### Two Neuron Test Weaken ###
+
+
+
+S_2 = [0.0 3.0; 3.0 0.0]
+S_lb_2 = [0.0 0.0; 0.0 0.0]
+S_ub_2 = [4.0 4.0; 4.0 4.0]
+mask_2 = [false true; true false]
+a_2 = [.02, .02]
+b_2 = [.2, .2]
+c_2 = [-65.0, -65.0]
+d_2 = [8.0, 8.0]
+
+v_2 = [-65.0, -65.0]
+u_2 = b_2 .* v_2
+firings_2 = [false, false]
+
+reward_2 = Reward(0.0, 200)
+
+net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, u_2, v_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
+
+
+pre_synaptic_increment_2 = .125
+post_synaptic_increment_2 = -.125
+
+const_matrix_2 = [1.0 1.0; 1.0 1.0]
+all_decay = 1000
+
+eligibility_trace_2 = EligibilityTrace(zeros(2), zeros(2), zeros(2, 2), pre_synaptic_increment_2, post_synaptic_increment_2, const_matrix_2, all_decay, all_decay, all_decay)
+
+print("Starting simulation Two Neuron-\n")
+for T in 1:60
+    global firings_2 = [false, false]
+    pre_trace_minus = Float64[]
+    post_trace_minus = Float64[]
+    e_trace_minus = Float64[]
+    reward_trace_minus = Float64[]
+    weight_minus = Float64[]
+
+    for t in 1:1000
+        if t == 500
+            I = [0.0, 105.0]
+        elseif t == 505
+            I = [105.0, 0.0]
+        else
+            I = [0.0, 0.0]
+        end
+
+        step_network!(I, net_2)
+
+        step_trace!(eligibility_trace_2, net_2.fired, net_2.mask)
+
+        # inject dopamine if Group 1 stimulated
+        global reward_2 = t == 505 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
+
+        # find weight update increment
+        dw = weight_update(eligibility_trace_2, reward_2)
+        
+        # update weights
+        net_2.S = net_2.S + dw
+        net_2.S .= clamp.(net_2.S, S_lb_2, S_ub_2)
+
+        global firings_2 = hcat(firings_2, net_2.fired)
+        push!(pre_trace_minus, eligibility_trace_2.pre_trace[1])
+        push!(post_trace_minus, eligibility_trace_2.post_trace[2])
+        push!(e_trace_minus, eligibility_trace_2.e_trace[2, 1])
+        push!(reward_trace_minus, reward_2.reward)
+        push!(weight_minus, net_2.S[2, 1])
+    end
+
+    print("$T seconds finished\n")
+    if T % 5 == 0
+        raster_plot(firings_2)
+        savefig("two_neuron_weaken_raster_plot_$T.png")
+        eligibility_trace_plots([pre_trace_minus, post_trace_minus, e_trace_minus, reward_trace_minus, weight_minus])
+        savefig("two_neuron_weaken_trace_plot_$T.png")
+    end
+end
+
+
 
 
 ### STDP TEST ####
@@ -487,7 +637,7 @@ v = ([-65.0 for i in 1:(Ne+Ni)])
 u = (b .* v)
 firings = [false for i in 1:(Ne+Ni)]
 
-net = MaskedIzhNetwork(Ne+Ni, a, b, c, d, u, v, S, mask, firings)
+net = MaskedIzhNetwork(Ne+Ni, a, b, c, d, u, v, S, S_ub, S_lb, mask, firings)
 
 # initialize "dopamine" levels and decay parameter (.2s in ms)
 reward = Reward(0.0, 200)
@@ -529,7 +679,7 @@ for T in 1:36001
         step_trace!(eligibility_trace, net.fired, net.mask)
 
         # inject dopamine if Group 1 stimulated
-        stim_supplied && input == 1 ? step_reward!(reward, .5) : step_reward!(reward, 0.0)
+        global reward = stim_supplied && input == 1 ? step_reward(reward, .5) : step_reward(reward, 0.0)
 
         # find weight update increment
         dw = weight_update(eligibility_trace, reward)
@@ -543,17 +693,17 @@ for T in 1:36001
         push!(post_trace_1, eligibility_trace.post_trace[1])
         push!(reward_trace, reward.reward)
 
-        if t%100 == 1
+        if t%100 == 0
             print("$t ms simulated... \n")
         end
     end
 
     print("$T seconds finished\n")
-    #if T % 1 == 1
-    raster_plot(firings)
-    savefig("raster_plot_$T.png")
-    eligibility_trace_plots([pre_trace_1, post_trace_1, reward_trace])
-    savefig("trace_plot_$T.png")
-    #end
+    if T % 60 == 0
+        raster_plot(firings)
+        savefig("raster_plot_$T.png")
+        eligibility_trace_plots([pre_trace_1, post_trace_1, reward_trace])
+        savefig("trace_plot_$T.png")
+    end
 end
 
