@@ -3,7 +3,7 @@ using SparseArrays
 using Profile
 using Random
 
-cd("F:\\VSCode Projects\\MDLSNN")
+cd("C:\\Users\\torre\\VSCode Projects\\MDL_SNN")
 
 abstract type IzhNetwork end
 
@@ -469,8 +469,8 @@ reward_2 = Reward(0.0, 200)
 net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, u_2, v_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
 
 
-pre_synaptic_increment_2 = .125
-post_synaptic_increment_2 = -.125
+pre_synaptic_increment_2 = .0125
+post_synaptic_increment_2 = -.0125
 
 const_matrix_2 = [1.0 1.0; 1.0 1.0]
 all_decay = 1000
@@ -478,19 +478,22 @@ all_decay = 1000
 eligibility_trace_2 = EligibilityTrace(zeros(2), zeros(2), zeros(2, 2), pre_synaptic_increment_2, post_synaptic_increment_2, const_matrix_2, all_decay, all_decay, all_decay)
 
 print("Starting simulation Two Neuron+\n")
-for T in 1:60
+for T in 1:1
     global firings_2 = [false, false]
+    pre_voltage = Float64[]
+    post_voltage = Float64[]
+
     pre_trace_plus = Float64[]
     post_trace_plus = Float64[]
     e_trace_plus = Float64[]
     reward_trace_plus = Float64[]
     weight_plus = Float64[]
 
-    for t in 1:1000
-        if t == 500
-            I = [105.0, 0.0]
-        elseif t == 505
-            I = [0.0, 105.0]
+    for t in 1:5000
+        if t%1000 == 500
+            I = [55.0, 0.0]
+        elseif t%1000 == 505
+            I = [0.0, 55.0]
         else
             I = [0.0, 0.0]
         end
@@ -515,6 +518,8 @@ for T in 1:60
         push!(e_trace_plus, eligibility_trace_2.e_trace[2, 1])
         push!(reward_trace_plus, reward_2.reward)
         push!(weight_plus, net_2.S[2, 1])
+        push!(pre_voltage, net_2.v[1])
+        push!(post_voltage, net_2.v[2])
     end
 
     print("$T seconds finished\n")
@@ -523,6 +528,8 @@ for T in 1:60
         savefig("two_neuron_strengthen_raster_plot_$T.png")
         eligibility_trace_plots([pre_trace_plus, post_trace_plus, e_trace_plus, reward_trace_plus, weight_plus])
         savefig("two_neuron_strengthen_trace_plot_$T.png")
+        eligibility_trace_plots([pre_voltage, post_voltage])
+        savefig("two_neuron_strengthen_voltage_plot_$T.png")
     end
 end
 
@@ -549,8 +556,8 @@ reward_2 = Reward(0.0, 200)
 net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, u_2, v_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
 
 
-pre_synaptic_increment_2 = .125
-post_synaptic_increment_2 = -.125
+pre_synaptic_increment_2 = .0125
+post_synaptic_increment_2 = -.0125
 
 const_matrix_2 = [1.0 1.0; 1.0 1.0]
 all_decay = 1000
@@ -558,19 +565,22 @@ all_decay = 1000
 eligibility_trace_2 = EligibilityTrace(zeros(2), zeros(2), zeros(2, 2), pre_synaptic_increment_2, post_synaptic_increment_2, const_matrix_2, all_decay, all_decay, all_decay)
 
 print("Starting simulation Two Neuron-\n")
-for T in 1:60
+for T in 1:1
     global firings_2 = [false, false]
+    pre_voltage = Float64[]
+    post_voltage = Float64[]
+
     pre_trace_minus = Float64[]
     post_trace_minus = Float64[]
     e_trace_minus = Float64[]
     reward_trace_minus = Float64[]
     weight_minus = Float64[]
 
-    for t in 1:1000
-        if t == 500
-            I = [0.0, 105.0]
-        elseif t == 505
-            I = [105.0, 0.0]
+    for t in 1:5000
+        if t%1000 == 500
+            I = [0.0, 95.0]
+        elseif t%1000 == 505
+            I = [95.0, 0.0]
         else
             I = [0.0, 0.0]
         end
@@ -595,14 +605,18 @@ for T in 1:60
         push!(e_trace_minus, eligibility_trace_2.e_trace[2, 1])
         push!(reward_trace_minus, reward_2.reward)
         push!(weight_minus, net_2.S[2, 1])
+        push!(pre_voltage, net_2.v[1])
+        push!(post_voltage, net_2.v[2])
     end
 
     print("$T seconds finished\n")
-    if T % 5 == 0
+    if T % 5 == 1
         raster_plot(firings_2)
         savefig("two_neuron_weaken_raster_plot_$T.png")
         eligibility_trace_plots([pre_trace_minus, post_trace_minus, e_trace_minus, reward_trace_minus, weight_minus])
         savefig("two_neuron_weaken_trace_plot_$T.png")
+        eligibility_trace_plots([pre_voltage, post_voltage])
+        savefig("two_neuron_strengthen_voltage_plot_$T.png")
     end
 end
 
