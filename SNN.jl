@@ -82,9 +82,6 @@ function step_trace!(trace::EligibilityTrace, firings::Vector{Bool})
     trace.pre_trace = trace.pre_trace - trace.pre_trace/trace.pre_decay + firings * trace.pre_increment
     trace.post_trace = trace.post_trace - trace.post_trace/trace.post_decay + firings * trace.post_increment
 
-    #trace.e_trace = trace.e_trace + trace.pre_trace * transpose(firings)
-    #trace.e_trace = trace.e_trace + firings * transpose(trace.post_trace)
-
 
     # restructured logic
     len_post = length(trace.post_trace)
@@ -158,6 +155,7 @@ function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::Abstr
             # Check if presynaptic neuron is inhibitory
 
             # Check if the neurons have a synpatic connection j -> i
+            # remember wonky row/column indexing makes things "backwards"
             if mask[i,j]
 
                 # We add the *opposite* trace given a neural spike
@@ -453,7 +451,7 @@ end
 
 S_2 = [0.0 .01; .01 0.0]
 S_lb_2 = [0.0 0.0; 0.0 0.0]
-S_ub_2 = [4.0 4.0; 4.0 4.0]
+S_ub_2 = [20.0 20.0; 20.0 20.0]
 mask_2 = [false true; true false]
 a_2 = [.02, .02]
 b_2 = [.2, .2]
@@ -466,7 +464,7 @@ firings_2 = [false, false]
 
 reward_2 = Reward(0.0, 200)
 
-net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, u_2, v_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
+net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, v_2, u_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
 
 
 pre_synaptic_increment_2 = .0125
@@ -483,17 +481,20 @@ for T in 1:1
     pre_voltage = Float64[]
     post_voltage = Float64[]
 
+    pre_u = Float64[]
+    post_u = Float64[]
+
     pre_trace_plus = Float64[]
     post_trace_plus = Float64[]
     e_trace_plus = Float64[]
     reward_trace_plus = Float64[]
     weight_plus = Float64[]
 
-    for t in 1:5000
-        if t%1000 == 500
-            I = [55.0, 0.0]
-        elseif t%1000 == 505
-            I = [0.0, 55.0]
+    for t in 1:2000
+        if t%100 == 25
+            I = [25.0, 0.0]
+        elseif t%200 == 30
+            I = [0.0, 25.0]
         else
             I = [0.0, 0.0]
         end
@@ -503,7 +504,7 @@ for T in 1:1
         step_trace!(eligibility_trace_2, net_2.fired, net_2.mask)
 
         # inject dopamine if Group 1 stimulated
-        global reward_2 = t == 505 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
+        global reward_2  = t%100 == 30 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
 
         # find weight update increment
         dw = weight_update(eligibility_trace_2, reward_2)
@@ -520,6 +521,8 @@ for T in 1:1
         push!(weight_plus, net_2.S[2, 1])
         push!(pre_voltage, net_2.v[1])
         push!(post_voltage, net_2.v[2])
+        push!(pre_u, net_2.u[1])
+        push!(post_u, net_2.u[2])
     end
 
     print("$T seconds finished\n")
@@ -530,6 +533,8 @@ for T in 1:1
         savefig("two_neuron_strengthen_trace_plot_$T.png")
         eligibility_trace_plots([pre_voltage, post_voltage])
         savefig("two_neuron_strengthen_voltage_plot_$T.png")
+        eligibility_trace_plots([pre_u, post_u])
+        savefig("two_neuron_strengthen_u_plot_$T.png")
     end
 end
 
@@ -553,7 +558,7 @@ firings_2 = [false, false]
 
 reward_2 = Reward(0.0, 200)
 
-net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, u_2, v_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
+net_2 = MaskedIzhNetwork(2, a_2, b_2, c_2, d_2, v_2, u_2, S_2, S_ub_2, S_lb_2, mask_2, firings_2)
 
 
 pre_synaptic_increment_2 = .0125
@@ -578,9 +583,9 @@ for T in 1:1
 
     for t in 1:5000
         if t%1000 == 500
-            I = [0.0, 95.0]
+            I = [0.0, 25.0]
         elseif t%1000 == 505
-            I = [95.0, 0.0]
+            I = [25.0, 0.0]
         else
             I = [0.0, 0.0]
         end
@@ -590,7 +595,7 @@ for T in 1:1
         step_trace!(eligibility_trace_2, net_2.fired, net_2.mask)
 
         # inject dopamine if Group 1 stimulated
-        global reward_2 = t == 505 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
+        global reward_2 = t%1000 == 505 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
 
         # find weight update increment
         dw = weight_update(eligibility_trace_2, reward_2)
@@ -616,7 +621,7 @@ for T in 1:1
         eligibility_trace_plots([pre_trace_minus, post_trace_minus, e_trace_minus, reward_trace_minus, weight_minus])
         savefig("two_neuron_weaken_trace_plot_$T.png")
         eligibility_trace_plots([pre_voltage, post_voltage])
-        savefig("two_neuron_strengthen_voltage_plot_$T.png")
+        savefig("two_neuron_weaken_voltage_plot_$T.png")
     end
 end
 
