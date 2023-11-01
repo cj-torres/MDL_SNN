@@ -3,7 +3,9 @@ using SparseArrays
 using Profile
 using Random
 
-cd("C:\\Users\\torre\\VSCode Projects\\MDL_SNN")
+Random.seed!(1234)
+
+cd("F:\\VSCode Projects\\MDLSNN\\MDL_SNN")
 
 abstract type IzhNetwork end
 
@@ -33,6 +35,8 @@ function post_trace_copier(post_trace::Vector{<:AbstractFloat}, firings::Vector{
     end
     M
 end
+
+# Implement SSP?
 
 # reward functionality
 # Thanks be to Quintana, Perez-Pena, and Galindo (2022) for the following algorithm
@@ -543,9 +547,9 @@ end
 
 
 
-S_2 = [0.0 3.0; 3.0 0.0]
+S_2 = [0.0 20.0; 20.0 0.0]
 S_lb_2 = [0.0 0.0; 0.0 0.0]
-S_ub_2 = [4.0 4.0; 4.0 4.0]
+S_ub_2 = [20.0 20.0; 20.0 20.0]
 mask_2 = [false true; true false]
 a_2 = [.02, .02]
 b_2 = [.2, .2]
@@ -581,10 +585,10 @@ for T in 1:1
     reward_trace_minus = Float64[]
     weight_minus = Float64[]
 
-    for t in 1:5000
-        if t%1000 == 500
+    for t in 1:2000
+        if t%200 == 25
             I = [0.0, 25.0]
-        elseif t%1000 == 505
+        elseif t%100 == 30
             I = [25.0, 0.0]
         else
             I = [0.0, 0.0]
@@ -595,7 +599,7 @@ for T in 1:1
         step_trace!(eligibility_trace_2, net_2.fired, net_2.mask)
 
         # inject dopamine if Group 1 stimulated
-        global reward_2 = t%1000 == 505 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
+        global reward_2 = t%100 == 30 ? step_reward(reward_2, .5) : step_reward(reward_2, 0.0)
 
         # find weight update increment
         dw = weight_update(eligibility_trace_2, reward_2)
@@ -628,8 +632,8 @@ end
 
 
 
-### STDP TEST ####
-
+### STDP NETWORK TEST ####
+### POP+ LEARNING     ####
 
 # excitatory and inhibitory nuerons
 Ne, Ni = 800, 200
@@ -642,13 +646,13 @@ re, ri = rand(Ne), rand(Ni)
 is_inhibitory = vcat([false for i in 1:Ne],[true for in in 1:Ni])
 
 
-a = (vcat([.02 for i in 1:Ne], (.02 .+ .08*ri)))
-b = (vcat([.2 for i in 1:Ne] , (.25 .- .05*ri)))
-c = (vcat((-65.0 .+ 15.0 * (re .^ 2)), ([-65.0 for i in 1:Ni])))
-d = (vcat((8.0 .- 6.0*(re .^ 2)), [2.0 for i in 1:Ni]))
+a = (vcat([.02 for i in 1:Ne], [.06 for i in 1:Ni]))
+b = (vcat([.2 for i in 1:Ne] , [.225 for i in 1:Ni]))
+c = [-65.0 for i in 1:N]
+d = (vcat([8.0 for i in 1:Ne], [2.0 for i in 1:Ni]))
 S = (hcat(.5*rand(Ne+Ni, Ne), -rand(Ne+Ni, Ni)))
 mask = rand([true, false], 1000, 1000) .* rand([true, false], 1000, 1000)
-S = sparse(S .* mask)
+S = S .* mask
 S_ub = repeat(vcat(4.0*ones(Ne), zeros(Ni))', N, 1)
 S_lb = repeat(vcat(zeros(Ne), -4*ones(Ni))', N, 1)
 
@@ -656,7 +660,7 @@ v = ([-65.0 for i in 1:(Ne+Ni)])
 u = (b .* v)
 firings = [false for i in 1:(Ne+Ni)]
 
-net = MaskedIzhNetwork(Ne+Ni, a, b, c, d, u, v, S, S_ub, S_lb, mask, firings)
+net = MaskedIzhNetwork(Ne+Ni, a, b, c, d, v, u, S, S_ub, S_lb, mask, firings)
 
 # initialize "dopamine" levels and decay parameter (.2s in ms)
 reward = Reward(0.0, 200)
@@ -676,29 +680,67 @@ const_matrix = repeat(const_vector', N, 1)
 all_decay = 1000
 eligibility_trace = EligibilityTrace(zeros(N), zeros(N), zeros(N, N), pre_synaptic_increment, post_synaptic_increment, const_matrix, all_decay, all_decay, all_decay)
 
-input_groups = [1:50, 51:100, 101:150, 151:200, 201:250, 251:300, 301:350, 351:400, 401:450, 451:500]
+output_groups = [randperm(Ne)[1:50], randperm(Ne)[1:50], randperm(Ne)[1:50]]
+input = randperm(Ne)[1:500]
 
-print("Starting simulation \n")
+avg_tau = 10.0
+energy = 5
+
+
+print("Starting simulation simple sequence learner \n")
 for T in 1:36001
-    global firings = [false for i in 1:(Ne+Ni)]
+    global firings = [false for i in 1:N]
+    fire_group_1 = [false for i in 1:50]
+    fire_group_2 = [false for i in 1:50]
+    fire_group_3 = [false for i in 1:50]
+
+    ema_1 = 0.0
+    ema_2 = 0.0
+    ema_3 = 0.0
+
+    fire_rate_1 = Float64[]
+    fire_rate_2 = Float64[]
+    fire_rate_3 = Float64[]
+
     pre_trace_1 = Float64[]
     post_trace_1 = Float64[]
     reward_trace = Float64[]
 
     for t in 1:1000
-        input = rand(1:10)
-        #I = (vcat(5*randn(Ne), 2*randn(Ni)))
         I = zeros(N)
-        stim_supplied = rand() < .005
-        if stim_supplied
-            I[input_groups[input]] .= 30*ones(50) .+ randn(50)
+        if T % 2 == 1 
+            I[input] = energy*randn(500)
         end
+
         step_network!(I, net)
 
         step_trace!(eligibility_trace, net.fired, net.mask)
 
-        # inject dopamine if Group 1 stimulated
-        global reward = stim_supplied && input == 1 ? step_reward(reward, .5) : step_reward(reward, 0.0)
+        # update exponential moving average
+        ema_1 = sum(net.fired[output_groups[1]]) / avg_tau + ema_1 * (1 -  1 / avg_tau)
+        ema_2 = sum(net.fired[output_groups[2]]) / avg_tau + ema_2 * (1 -  1 / avg_tau)
+        ema_3 = sum(net.fired[output_groups[3]]) / avg_tau + ema_3 * (1 -  1 / avg_tau)
+
+        # perform sequence learning on odd trials, otherwise allow network to return to baselines
+        if T % 2 == 1
+            # first half of second should output one rate
+            if t < 500
+                if ema_1 > .5 && ema_2 < .2 && ema_3 < .2
+                    global reward = step_reward(reward, 0.2)
+                else
+                    global reward = step_reward(reward, 0.0)
+                end
+            # second half should output another rate
+            else
+                if ema_2 > .5 && ema_1 < .2 && ema_3 < .2
+                    global reward = step_reward(reward, 0.2)
+                else
+                    global reward = step_reward(reward, 0.0)
+                end
+            end
+        else
+            global reward = step_reward(reward, 0.0)
+        end
 
         # find weight update increment
         dw = weight_update(eligibility_trace, reward)
@@ -710,6 +752,9 @@ for T in 1:36001
         global firings = hcat(firings, net.fired)
         push!(pre_trace_1, eligibility_trace.pre_trace[1])
         push!(post_trace_1, eligibility_trace.post_trace[1])
+        push!(fire_rate_1, ema_1)
+        push!(fire_rate_2, ema_2)
+        push!(fire_rate_3, ema_3)
         push!(reward_trace, reward.reward)
 
         if t%100 == 0
@@ -718,11 +763,13 @@ for T in 1:36001
     end
 
     print("$T seconds finished\n")
-    if T % 60 == 0
+    if T % 2 == 1
         raster_plot(firings)
         savefig("raster_plot_$T.png")
         eligibility_trace_plots([pre_trace_1, post_trace_1, reward_trace])
         savefig("trace_plot_$T.png")
+        eligibility_trace_plots([fire_rate_1, fire_rate_2, fire_rate_3])
+        savefig("fire_rate_$T.png")
     end
 end
 
