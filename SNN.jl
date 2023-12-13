@@ -5,7 +5,7 @@ using Random
 
 Random.seed!(1234)
 
-cd("F:\\VSCode Projects\\MDLSNN\\MDL_SNN")
+cd("C:\\Users\\torre\\VSCode Projects\\MDL_SNN")
 
 abstract type IzhNetwork end
 
@@ -211,40 +211,6 @@ function step_trace!(trace::EligibilityTrace, firings::Vector{Bool}, mask::Spars
     e_trace_delta = (addable_post_trace+addable_pre_trace) .* trace.constants 
     trace.e_trace = trace.e_trace + e_trace_delta .* mask - trace.e_trace/trace.e_decay
 
-
-    #for j in 1:J
-    #    is_inhibitory_cleft = is_inhibitory[j]
-    #    if is_inhibitory_cleft
-    #        # k variable used to loop over range in nzrange and retrieve true row index i
-    #        for k in nzrange(mask, j)
-    #            # use nzrange to get actual row index i
-    #            i = rows[k]
-    #
-    #
-    #            if firings[i]
-    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.inhibitory_constant*trace.pre_trace[j]
-    #            end
-    #            if firings[j]
-    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.inhibitory_constant*trace.post_trace[i]
-    #            end
-    #
-    #        end
-    #    else
-    #        for k in nzrange(mask, j)
-    #            i = rows[k]
-    #            if firings[i]
-    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.pre_trace[j]
-    #            end
-    #            if firings[j]
-    #                trace.e_trace[i, j] = trace.e_trace[i, j] + trace.post_trace[i]
-    #            end
-    #
-    #        end
-    #    end
-    #end
-
-    # each trace will decay according to the decay parameter
-    #trace.e_trace = trace.e_trace - trace.e_trace/trace.e_decay
 end
 
 function weight_update(trace::EligibilityTrace, reward::Reward)
@@ -405,6 +371,7 @@ function step_network!(in_voltage::Vector{<:AbstractFloat}, network::MaskedIzhNe
     # update voltages (twice for stability)
     network.v = network.v + 0.5*(0.04*(network.v .^ 2) + 5*network.v .+ 140 - network.u + in_voltage)
     network.v = network.v + 0.5*(0.04*(network.v .^ 2) + 5*network.v .+ 140 - network.u + in_voltage)
+    network.v = min.(network.v, 30)
 
     # update recovery parameter u
     network.u = network.u + network.a .* (network.b .* network.v - network.u)
@@ -449,6 +416,15 @@ function eligibility_trace_plots(traces::Vector{<:Vector{<:AbstractFloat}})
     plot(plots..., layout = (length(plots), 1), fmt=:png)
 end
 
+function two_voltage_plot(voltage_traces::Vector{<:Vector{<:AbstractFloat}})
+    plots = []
+    time = [t for t in 1:length(voltage_traces[1])]
+    ylimits = [0,1200]
+    push!(plots, plot(time, voltage_traces[1], legend = false, ylims = [-90,40]))
+    push!(plots, plot(time, voltage_traces[2], xlabel="Time (ms)", legend = false, ylims = [-90,40]))
+
+    plot(plots..., layout = (length(plots), 1), fmt=:png, ylabel = "Voltage (mV)")
+end
 
 
 ### Two Neuron Test Strengthen ###
@@ -535,7 +511,7 @@ for T in 1:1
         savefig("two_neuron_strengthen_raster_plot_$T.png")
         eligibility_trace_plots([pre_trace_plus, post_trace_plus, e_trace_plus, reward_trace_plus, weight_plus])
         savefig("two_neuron_strengthen_trace_plot_$T.png")
-        eligibility_trace_plots([pre_voltage, post_voltage])
+        two_voltage_plot([pre_voltage, post_voltage])
         savefig("two_neuron_strengthen_voltage_plot_$T.png")
         eligibility_trace_plots([pre_u, post_u])
         savefig("two_neuron_strengthen_u_plot_$T.png")
@@ -624,7 +600,7 @@ for T in 1:1
         savefig("two_neuron_weaken_raster_plot_$T.png")
         eligibility_trace_plots([pre_trace_minus, post_trace_minus, e_trace_minus, reward_trace_minus, weight_minus])
         savefig("two_neuron_weaken_trace_plot_$T.png")
-        eligibility_trace_plots([pre_voltage, post_voltage])
+        two_voltage_plot([pre_voltage, post_voltage])
         savefig("two_neuron_weaken_voltage_plot_$T.png")
     end
 end
@@ -636,7 +612,7 @@ end
 ### POP+ LEARNING     ####
 
 # excitatory and inhibitory nuerons
-Ne, Ni = 800, 200
+Ne, Ni = 1600, 400
 N = Ne + Ni
 N = Int64(N)
 
@@ -651,7 +627,7 @@ b = (vcat([.2 for i in 1:Ne] , [.225 for i in 1:Ni]))
 c = [-65.0 for i in 1:N]
 d = (vcat([8.0 for i in 1:Ne], [2.0 for i in 1:Ni]))
 S = (hcat(.5*rand(Ne+Ni, Ne), -rand(Ne+Ni, Ni)))
-mask = rand([true, false], 1000, 1000) .* rand([true, false], 1000, 1000)
+mask = rand([true, false], N, N) .* rand([true, false], N, N).* rand([true, false], N, N)
 S = S .* mask
 S_ub = repeat(vcat(4.0*ones(Ne), zeros(Ni))', N, 1)
 S_lb = repeat(vcat(zeros(Ne), -4*ones(Ni))', N, 1)
@@ -725,15 +701,15 @@ for T in 1:36001
         if T % 2 == 1
             # first half of second should output one rate
             if t < 500
-                if ema_1 > .5 && ema_2 < .2 && ema_3 < .2
-                    global reward = step_reward(reward, 0.2)
+                if ema_1 > .3 && ema_2 < .1 && ema_3 < .1
+                    global reward = step_reward(reward, 0.1)
                 else
                     global reward = step_reward(reward, 0.0)
                 end
             # second half should output another rate
             else
-                if ema_2 > .5 && ema_1 < .2 && ema_3 < .2
-                    global reward = step_reward(reward, 0.2)
+                if ema_2 > .3 && ema_1 < .1 && ema_3 < .1
+                    global reward = step_reward(reward, 0.1)
                 else
                     global reward = step_reward(reward, 0.0)
                 end
